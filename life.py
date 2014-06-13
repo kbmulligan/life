@@ -28,7 +28,7 @@
 #
 #########################
 
-import pygame, sys, math, random
+import pygame, sys, math, random, time
 from pygame.locals import *
 
 # main program config
@@ -40,18 +40,26 @@ borderWidth = 10
 bottomPad = 2
 fps = 60
 title = 'chairflyer'
-timeInc = 3 # seconds
-
-waypointsFilename = "waypoints.txt"
-
+timeInc = 0.1            # seconds to wait each iteration
+globalTime = 0         # global time counter
 
 # player startup values
 startingPoints = 0
 startingLives = 5
 
+
+# game data
+minNeighborsToLive = 2
+maxNeighborsToLive = 3
+neighborsToStart = 3
+
+player = None
+
+
 # color presets
 red = pygame.Color(255,0,0)
 green = pygame.Color(0,255,0)
+darkGreen = pygame.Color(0,140,0)
 blue = pygame.Color(0,0,255)
 lightBlue = pygame.Color(200,200,255)
 white = pygame.Color(255,255,255)
@@ -59,9 +67,6 @@ black = pygame.Color(0,0,0)
 
 def gray (val):
     return pygame.Color(val,val,val)
-    
-def recip (heading):
-    return (heading + 180) % 360 
 
 def distance (a, b):
     return math.sqrt(abs(a[0] - b[0])**2 + abs(a[1] - b[1])**2)
@@ -112,7 +117,66 @@ class Game:
     def getLevel(self):
         return self.level
         
+class Block:
+    
+    size = 15            # length of side    
+    fillColor = white
+    borderColor = black
+    
+    def __init__(self, col):
+        self.fillColor = col
+    
+    def getSize(self):
+        return self.size
         
+    def getFillColor(self):
+        return self.fillColor
+        
+    def setFillColor(self, newF):
+        self.fillColor = newF
+     
+    def getBorderColor(self):
+        return self.borderColor
+    
+    def setBorderColor(self, newB):
+        self.borderColor = newB
+    
+    def draw(self, wso, x, y):    
+        pygame.draw.rect(wso, self.getFillColor(), (x,y,self.size,self.size), 0)
+        pygame.draw.rect(wso, self.getBorderColor(), (x,y,self.size,self.size), 1)
+                
+class Cell:
+    
+    size = 1
+    alive = False
+    aliveGraphic = None
+    deadGraphic = None
+    
+    def __init__(self, gAlive, gDead):
+        self.aliveGraphic = gAlive
+        self.deadGraphic = gDead
+    
+    def setAlive(self, newStatus):
+        self.alive = newStatus
+        
+    def kill(self):
+        self.alive = False
+        
+    def start(self):
+        self.alive = True
+        
+    def toggleAlive(self):
+        self.alive = not self.alive
+        
+    def isAlive(self):
+        return self.alive
+        
+    def getGraphic(self):
+        if self.alive:
+            return self.aliveGraphic
+        else:
+            return self.deadGraphic
+       
 # setup
 
 pygame.init()
@@ -133,7 +197,26 @@ game.setLevel(1)
 player = Player(0,1)
 
 
+# playing grid
+gridWidth = int(math.floor((res[0] - borderWidth*2)/Block(white).getSize()))
+gridHeight = int(math.floor((res[1] - borderWidth*5)/Block(white).getSize()))
 
+# init 
+grid = []
+
+for x in range(gridHeight):
+    grid.append([])
+    for y in range(gridWidth):
+        grid[x].append(Cell(Block(darkGreen), Block(white)))
+        
+        
+random.seed()
+for row in grid:
+    for el in row:
+        if (random.choice([True, False, False, False, False])): # , False, False, False, False])):
+            el.toggleAlive()
+        
+        
 # input section
 def processInput():
     global paused, mute, msg, debug
@@ -240,7 +323,10 @@ def draw():
     # draw border
     pygame.draw.rect(windowSurfObj, white, (borderWidth,borderWidth,res[0]-borderWidth*2,res[1]-(fontSize + bottomPad + borderWidth*2)), 1)
     
+    # draw grid
+    drawGrid(windowSurfObj, grid)
     
+
     # debug status
     if debug:
         drawText(windowSurfObj, 'Status: ', (borderWidth, res[1] - (fontSize)))
@@ -248,8 +334,16 @@ def draw():
         drawText(windowSurfObj, 'Lives: ' + str(player.getLives()), (borderWidth, res[1] - (fontSize)))
         
     # stats
-    drawText(windowSurfObj, 'Score: ' + str(player.getPoints()), (res[0]*3/5 , res[1] - (fontSize)))
+    drawText(windowSurfObj, 'Generation: ' + str(globalTime), (res[0]*3/5 , res[1] - (fontSize)))
     drawText(windowSurfObj, 'Level: ' + str(game.getLevel()), (res[0]*4/5 , res[1] - (fontSize)))
+
+def drawGrid(wso, g):
+    gridX, gridY = res[0]/2 - Block(white).getSize()*gridWidth/2, res[1]/2 - Block(white).getSize()*gridHeight/2 - fontSize/2
+    
+    for row in grid:
+        for el in row:
+            el.getGraphic().draw(wso, gridX + row.index(el)*el.getGraphic().getSize(), gridY + grid.index(row)*el.getGraphic().getSize() )   
+
 
 def drawBackground(wso):
     pygame.draw.circle(wso, gray(25), (res[0]/3 + 40, res[1]/3), 240)
@@ -285,6 +379,140 @@ def resetGame():
     player.setPoints(startingPoints)
     player.setLives(startingLives)
 
+def iterate():
+    global globalTime
+    #time.sleep(timeInc)
+    globalTime += 1
+    
+    evaluate()
+    
+def evaluate():
+    global grid
+
+    # not looking at any edges
+    for row in range(len(grid)):
+        for col in range(len(grid[row])):
+            neighbors = getLiveNeighbors(grid, row, col)
+            if (grid[row][col].isAlive()):                                                   # live cells
+                if (neighbors < minNeighborsToLive or neighbors > maxNeighborsToLive):   #   -- kill criteria
+                    grid[row][col].kill()
+            else:                                                                        # dead cells
+                if (neighbors == neighborsToStart):                                      #   -- birth criteria
+                    grid[row][col].start()
+                    
+def getLiveNeighbors(g, r, c):                # grid, row, column
+    neighbors = 0    
+    
+    if (r == 0):                              # top edge
+        if (c == 0):                          # top left corner
+            if (g[r][c+1].isAlive()):
+                neighbors += 1
+            if (g[r+1][c+1].isAlive()):
+                neighbors += 1
+            if (g[r+1][c].isAlive()):
+                neighbors += 1
+                
+        elif (c == len(g[r]) - 1):               # top right corner
+            if (g[r][c-1].isAlive()):
+                neighbors += 1
+            if (g[r+1][c-1].isAlive()):
+                neighbors += 1
+            if (g[r+1][c].isAlive()):
+                neighbors += 1
+                
+        else:
+            if (g[r][c-1].isAlive()):
+                neighbors += 1
+            if (g[r][c+1].isAlive()):
+                neighbors += 1
+                
+            if (g[r+1][c-1].isAlive()):
+                neighbors += 1
+            if (g[r+1][c].isAlive()):
+                neighbors += 1
+            if (g[r+1][c+1].isAlive()):
+                neighbors += 1 
+        
+    elif (r == len(g) - 1):                   # bottom edge
+        if (c == 0):                          # bottom left corner
+            if (g[r-1][c].isAlive()):
+                neighbors += 1
+            if (g[r-1][c+1].isAlive()):
+                neighbors += 1
+            if (g[r][c+1].isAlive()):
+                neighbors += 1
+                
+        elif (c == len(g[r]) - 1):               # bottom right corner
+            if (g[r-1][c].isAlive()):
+                neighbors += 1
+            if (g[r-1][c-1].isAlive()):
+                neighbors += 1
+            if (g[r][c-1].isAlive()):
+                neighbors += 1
+                
+        else:
+            if (g[r][c-1].isAlive()):
+                neighbors += 1
+            if (g[r][c+1].isAlive()):
+                neighbors += 1
+                
+            if (g[r-1][c-1].isAlive()):
+                neighbors += 1
+            if (g[r-1][c].isAlive()):
+                neighbors += 1
+            if (g[r-1][c+1].isAlive()):
+                neighbors += 1 
+        
+    elif (c == 0):                            # left edge
+        if (g[r-1][c].isAlive()):
+            neighbors += 1
+        if (g[r+1][c].isAlive()):
+            neighbors += 1
+            
+        if (g[r-1][c+1].isAlive()):
+            neighbors += 1
+        if (g[r][c+1].isAlive()):
+            neighbors += 1
+        if (g[r+1][c+1].isAlive()):
+            neighbors += 1 
+        
+        
+    elif (c == len(g[r]) - 1):                # right edge
+        if (g[r-1][c-1].isAlive()):
+            neighbors += 1
+        if (g[r][c-1].isAlive()):
+            neighbors += 1
+        if (g[r+1][c-1].isAlive()):
+            neighbors += 1
+            
+        if (g[r-1][c].isAlive()):
+            neighbors += 1
+        if (g[r+1][c].isAlive()):
+            neighbors += 1
+        
+    else:                                     # all those not on the edge
+        if (g[r-1][c-1].isAlive()):
+            neighbors += 1
+        if (g[r][c-1].isAlive()):
+            neighbors += 1
+        if (g[r+1][c-1].isAlive()):
+            neighbors += 1
+        
+        if (g[r-1][c].isAlive()):
+            neighbors += 1
+        if (g[r+1][c].isAlive()):
+            neighbors += 1
+            
+        if (g[r-1][c+1].isAlive()):
+            neighbors += 1
+        if (g[r][c+1].isAlive()):
+            neighbors += 1
+        if (g[r+1][c+1].isAlive()):
+            neighbors += 1    
+            
+        
+    return neighbors
+
 # main program loop
 while True:
 
@@ -292,6 +520,8 @@ while True:
     checkGame()
     
     # do AI
+    if not paused:
+        iterate()
     
     # draw
     draw()
@@ -303,4 +533,6 @@ while True:
     # update draw
     pygame.display.update()
     fpsClock.tick(fps)
+    
+    
 
