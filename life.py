@@ -39,7 +39,7 @@ res = (1366, 768) # resolution
 borderWidth = 10
 bottomPad = 2
 fps = 60
-title = 'chairflyer'
+title = 'life'
 timeInc = 0.1            # seconds to wait each iteration
 globalTime = 0         # global time counter
 
